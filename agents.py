@@ -376,7 +376,98 @@ class TSAgent(General):
 
             assert self.alpha.all()>0 and self.beta.all()>0
                 
-             
+ class DS(General):
+    def __init__(self,mean,variance,samples,alpha, beta, prop_factor):
+        super().__init__()
+        self.mean = mean.astype(np.float64)
+        self.variance = variance.astype(np.float64)
+        self.slots  = mean.shape[1]
+        self.samples = samples
+        self.alpha = alpha
+        self.beta = beta
+        self.num_expts = mean.shape[0]
+        self.estimates = np.zeros(alpha.shape)
+        self.action_count = np.zeros(alpha.shape)
+        self.prop_factor = prop_factor
+    def get_action(self):
+        
+        samples_matrix = np.zeros((self.num_expts,self.samples,self.slots))
+        
+        for j in range(self.num_expts):
+         for i in range(self.slots):
+            
+            samples_matrix[j,:,i] = np.random.beta(self.alpha[j][i],self.beta[j][i],self.samples)
+        self.estimates = samples_matrix 
+          
+        for j in range(self.num_expts):
+            freq_array = np.zeros(self.slots)
+            for i in range(self.samples):
+                freq_array[np.argmax(samples_matrix[j][i])]+=1
+              
+            self.mean[j] = freq_array/self.samples
+            self.variance[j] = np.multiply(np.square(1 - self.mean[j])/self.samples,freq_array) + np.multiply((np.square(self.mean[j])/self.samples),self.samples-freq_array)
+        arm_freq = np.zeros(self.num_expts)
+        
+        for i in range(self.num_expts):
+            max_prob= np.max(self.mean[i])
+            pfa = 0
+            for j in range(self.slots):
+                if self.mean[i][j]!=max_prob:
+                  if self.variance[i][j] !=0:
+                   val = (max_prob-self.mean[i][j])/math.sqrt(self.variance[i][j])
+                   
+                   pfa+=((1-norm.cdf(val,0,1))/(self.slots-1))
+            arm_freq[i] = pfa       
+        
+        
+        arm_freq=np.log(1/arm_freq)
+        
+        arm_freq = self.slots*self.prop_factor*arm_freq
+        
+        slot_freq = np.zeros((self.num_expts,self.slots))
+        
+        for j in range(self.num_expts):
+             #print(round(arm_freq[j]))
+            if arm_freq[j]!= float('inf'): 
+             slot_freq[j] = draw_samples(self.mean[j],round(arm_freq[j]))
+            else:
+             slot_freq[j] = draw_samples(self.mean[j],round(self.slots*self.prop_factor*10))    
+        action = self.greedy_order(slot_freq) 
+            
+        #print(slot_freq)
+        #print(action)
+        return np.tile(1,(self.num_expts,1)),action ,np.tile(0,(self.num_expts,1))
+    
+    def update_estimates(self, cost, state, action_type, action,explore_type):
+        for j in range(self.num_expts):
+            #print(self.estimates)
+            num_expts, num_slots = action.shape
+        
+            c = int(cost[j][0])-1
+            if c>0:
+                changed = action[j][:c]-1
+                
+                # Update the estimates and counts for the changed actions
+                self.action_count[j, changed] += 1
+                #print(self.action_count)
+                self.beta[j, changed] += 1
+                #print(self.estimates)
+                
+            # Update the estimates and counts for the not-changed action, if it exists
+            slot = action[j][c]-1
+            if c == num_slots-1:
+                self.action_count[j, slot] += 1
+                if state[j][slot]==1:
+                    self.alpha[j, slot] += 1
+                else:
+                    self.beta[j,slot] +=1
+            else :
+                self.action_count[j, slot] += 1
+                #print(self.action_count)
+                #print(self.action_count)
+                self.alpha[j, slot] += 1
+
+            assert self.alpha.all()>0 and self.beta.all()>0            
         
 class experiment():
     def __init__(self,agents,env,num_expts,num_slots,num_steps):
