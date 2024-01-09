@@ -136,7 +136,7 @@ class OptimalAgent(General):
         
         self.num_slots = p_values.shape[1]
         self.num_expts = p_values.shape[0]
-        self.estimates = p_values.astype(np.float64)
+        self.estimates = p_values
         
         
     
@@ -376,7 +376,82 @@ class TSAgent(General):
 
             assert self.alpha.all()>0 and self.beta.all()>0
                 
+class TS_UCBAgent(General):
+    def __init__(self, alpha, beta, radius,m):
+        super().__init__()
+        # Store the epsilon value
+        alpha = alpha.astype(np.float64)
+        beta = beta.astype(np.float64)
+        
+        assert len(alpha.shape) == 2
+        assert len(beta.shape) == 2
+
+        assert alpha.all()>0 and beta.all() and radius.all()>0
+        
+
+        self.num_slots = alpha.shape[1]
+        self.num_expts = beta.shape[0]
+        self.alpha = alpha.astype(np.float64)
+        self.beta = beta.astype(np.float64)
+        self.estimates = np.zeros(alpha.shape)
+        self.action_count = np.zeros(alpha.shape)
+        self.radius = radius
+        self.steps = 0
+        self.sampling_num = self.m = m
+        
+    
+    def get_action(self):
+
+        sampled_estimates = np.zeros(self.alpha.shape).astype(np.float64)
+        for i in range(self.m):
+            sampled_estimates += np.amax(np.random.beta(self.alpha,self.beta,self.alpha.shape).astype(np.float64),axis=1).reshape(-1,1)
+        sampled_estimates /=self.m
+        mu = self.alpha/(self.alpha+self.beta)
+        self.estimates = mu
+        sampled_estimates = (sampled_estimates-mu)/self.radius
+        action = self.greedy_order(-sampled_estimates)
+
+        return np.tile(1,(self.num_expts,1)),action ,np.tile(0,(self.num_expts,1))
+    
+    def update_estimates(self, cost, state, action_type, action,explore_type):
+        for j in range(self.num_expts):
+            
+            num_expts, num_slots = action.shape
+        
+            c = int(cost[j][0])-1
+            if c>0:
+                changed = action[j][:c]-1
+                
+                # Update the estimates and counts for the changed actions
+                self.action_count[j, changed] += 1
+                #print(self.action_count)
+                self.beta[j, changed] += 1
+                #print(self.estimates)
+                
+            # Update the estimates and counts for the not-changed action, if it exists
+            slot = action[j][c]-1
+            if c == num_slots-1:
+                self.action_count[j, slot] += 1
+                if state[j][slot]==1:
+                    self.alpha[j, slot] += 1
+                else:
+                    self.beta[j,slot] +=1
+            else :
+                self.action_count[j, slot] += 1
+                
+                self.alpha[j, slot] += 1
+
+            assert self.alpha.all()>0 and self.beta.all()>0
+        self.steps+=self.num_slots
+        zero_mask = self.action_count == 0
+        non_zero_mask = ~zero_mask
+        # Calculate radius for slots with non-zero action_count
+        self.radius[non_zero_mask] = np.sqrt(2 * np.log(self.steps) / self.action_count[non_zero_mask])
+        # Set radius to 0 for slots with zero action_count
+        self.radius[zero_mask] = 1 
+                
              
+        
         
 class experiment():
     def __init__(self,agents,env,num_expts,num_slots,num_steps):
@@ -454,6 +529,7 @@ class experiment():
         plt.xlabel("Steps")
         plt.show()        
 
+        
     
 
     
