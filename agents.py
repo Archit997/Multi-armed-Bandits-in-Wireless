@@ -108,7 +108,29 @@ class General():
         else:
             sorted_indices = np.apply_along_axis(self.sort_with_noise, 1, estimates)
         return sorted_indices
+    def sort_with_noise2(self,row):
+        # Identifying unique values and their counts
+        unique, counts = np.unique(row, return_counts=True)
+
+        # Only add noise to elements where there are ties
+        for value, count in zip(unique, counts):
+            if count > 1:
+                noise = np.random.normal(0, 1e-6, count)  # Small noise
+                indices = row == value
+                row[indices] += noise
+
+        # Sort the indices after adding noise
+        sorted_indices = np.argsort(-row) + 1
+        sorted_indices[0], sorted_indices[1] = sorted_indices[1], sorted_indices[0]
+        return sorted_indices
     
+    def greedy_order2(self,estimates):
+        
+        if estimates.ndim == 1:
+            sorted_indices = self.sort_with_noise2(estimates)
+        else:
+            sorted_indices = np.apply_along_axis(self.sort_with_noise2, 1, estimates)
+        return sorted_indices
     def random_order(self,row):
         perm_index = np.random.permutation(len(row))
 
@@ -375,7 +397,80 @@ class TSAgent(General):
                 self.alpha[j, slot] += 1
 
             assert self.alpha.all()>0 and self.beta.all()>0
-                
+            
+ class TStop2Agent(General):
+    def __init__(self, means,sd,epsilon ):
+        super().__init__()
+        # Store the epsilon value
+        means = means.astype(np.float64)
+        sd = sd.astype(np.float64)
+        
+        assert len(means.shape) == 2
+        assert len(sd.shape) == 2
+
+        
+        self.epsilon = epsilon
+        self.num_slots = means.shape[1]
+        self.num_expts = sd.shape[0]
+        self.means = means.astype(np.float64)
+        self.sd = sd.astype(np.float64)
+        
+        self.action_count = np.zeros(sd.shape)
+        
+        
+    
+    def get_action(self):
+        
+        sampled_estimates = np.random.normal(self.means,self.sd,self.means.shape)
+        
+        best_action = self.greedy_order(sampled_estimates)
+        random_action = self.greedy_order2(sampled_estimates)
+        for i in range(self.num_expts):
+            
+            first = best_action[i][0] - 1
+            second = best_action[i][1] - 1
+            #print(self.alpha[i][first],self.alpha[i][second],self.beta[i][first],self.beta[i][second])
+            val = kldiv(self.means[i][first],self.sd[i][first],self.means[i][second],self.sd[i][second])
+            #print(val)
+            #print(self.means[i][first],self.sd[i][first],self.means[i][second],self.sd[i][second])
+            
+            self.epsilon[i] = 1- (1/(val+1)) 
+            
+        action_type = (np.random.random_sample(self.num_expts) > self.epsilon).astype(int).reshape(-1,1)
+        action = best_action * action_type + random_action * (1 - action_type)
+        
+        
+        self.estimates = sampled_estimates
+
+        return np.tile(1,(self.num_expts,1)),action ,np.tile(0,(self.num_expts,1))
+    
+    def update_estimates(self, cost, state, action_type, action,explore_type):
+        for j in range(self.num_expts):
+                num_expts, num_slots = action.shape
+
+                c = int(cost[j][0])-1
+
+                if c>0:
+                    changed = action[j][:c]-1
+
+                    # Update the estimates and counts for the changed actions
+                    self.action_count[j, changed] += 1
+
+                    self.means[j, changed] = self.inc_p(self.means[j, changed], 0, self.action_count[j, changed])
+
+                # Update the estimates and counts for the not-changed action, if it exists
+                slot = action[j][c]-1
+
+                if c == num_slots-1:
+                    self.action_count[j, slot] += 1
+                    self.means[j, slot] = self.inc_p(self.means[j, slot], state[j,slot], self.action_count[j, slot])
+                else :
+                    self.action_count[j, slot] += 1
+                    #print(self.action_count)
+                    #print(self.action_count)
+                    self.means[j, slot] = self.inc_p(self.means[j, slot], 1, self.action_count[j, slot])
+        self.sd = 1/(self.action_count + 1)
+        
  class DS(General):
     def __init__(self,mean,variance,samples,alpha, beta, prop_factor):
         super().__init__()
